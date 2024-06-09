@@ -1,5 +1,6 @@
-#include "Adafruit_SHT31.h"
-#include "Adafruit_Si7021.h"
+#include "Adafruit_AHTX0.h"
+// #include "Adafruit_SHT31.h"
+// #include "Adafruit_Si7021.h"
 #include "ESPAsyncWebServer.h"
 #include "SPIFFS.h"
 #include "WiFi.h"
@@ -14,12 +15,14 @@
 OneWire oneWire(PIN_ONE_WIRE_BUS);
 DallasTemperature oneWireSensors(&oneWire);
 DeviceAddress heaterSensor;
+Adafruit_AHTX0 aht_internal;
+// Adafruit_AHTX0 aht_external;
 
 AsyncWebServer server(80);
 int WiFi_status = WL_IDLE_STATUS;
 
-Adafruit_SHT31 temp_sensor_in = Adafruit_SHT31();
-Adafruit_Si7021 temp_sensor_out = Adafruit_Si7021();
+// Adafruit_SHT31 temp_sensor_in = Adafruit_SHT31();
+// Adafruit_Si7021 temp_sensor_out = Adafruit_Si7021();
 
 float temperature_samples_in[PID_SAMPLES] = {0};
 float temperature_samples_heater[PID_SAMPLES] = {0};
@@ -63,35 +66,64 @@ void setup()
     ledcAttachPin(PIN_FAN_PWM, PWM_CH_FAN);
     ledcWrite(PWM_CH_FAN, PWM_MAX_VALUE);
 
-    // Setup temperature and humidity oneWireSensors
-    if (!temp_sensor_out.begin())
-    {
-        Serial.println("Can't find Si7021 sensor! (out sensor)");
-        LED_ALL_OFF();
-        while (1)
-        {
-            LED_ON(PIN_LED_BLUE);
-            delay(250);
-            LED_OFF(PIN_LED_BLUE);
-            delay(250);
-        }
-    }
+    // // Setup temperature and humidity oneWireSensors
+    // if (!temp_sensor_out.begin())
+    // {
+    //     Serial.println("Can't find Si7021 sensor! (out sensor)");
+    //     LED_ALL_OFF();
+    //     while (1)
+    //     {
+    //         LED_ON(PIN_LED_BLUE);
+    //         delay(250);
+    //         LED_OFF(PIN_LED_BLUE);
+    //         delay(250);
+    //     }
+    // }
 
-    Wire.setClock(10000);
-    if (!temp_sensor_in.begin(0x44))
-    {
-        Serial.println("Can't find SHT31! (in sensor)");
-        LED_ALL_OFF();
-        while (1)
-        {
-            LED_ON(PIN_LED_GREEN);
-            delay(250);
-            LED_OFF(PIN_LED_GREEN);
-            delay(250);
-        }
-    }
+    // AHT10 Check fixed 0x38 address
+    // if (!aht_external.begin(
+    //         &Wire, 0,
+    //         AHTX0_I2CADDR_ALTERNATE)) // AHTX0_I2CADDR_DEFAULT = 0x38 or
+    //                                   // AHTX0_I2CADDR_ALTERNATE = 0x39
+    // {
+    //     Serial.println("Could not find AHT External ");
+    //     while (1)
+    //         delay(10);
+    // }
+    // Serial.print("AHT10 found on");
+    // Serial.println(AHTX0_I2CADDR_ALTERNATE);
 
-    oneWireSensors.begin();
+    // AHT10 Check fixed 0x38 address
+    // Wire.setClock(10000);
+
+    // AHTX0_I2CADDR_DEFAULT or AHTX0_I2CADDR_ALTERNATE = 0x38
+    if (!aht_internal.begin())
+    {
+        Serial.println("Could not find internal AHT... Check wiring");
+        while (1)
+            delay(10);
+    }
+    Serial.print("AHT10 found on");
+    Serial.println(AHTX0_I2CADDR_ALTERNATE);
+
+    // Wire.setClock(10000);
+    // if (!temp_sensor_in.begin(0x44))
+    // {
+    //     Serial.println("Can't find SHT31! (in sensor)");
+    //     LED_ALL_OFF();
+    //     while (1)
+    //     {
+    //         LED_ON(PIN_LED_GREEN);
+    //         delay(250);
+    //         LED_OFF(PIN_LED_GREEN);
+    //         delay(250);
+    //     }
+    // }
+
+    // oneWireSensors.begin();
+    // oneWireSensors.requestTemperatures();
+    // float tempC = oneWireSensors.getTempCByIndex(0);
+    // Serial.println(tempC);
     if (!oneWireSensors.getAddress(heaterSensor, 0))
     {
         Serial.println("Unable to find address for Device 0 (heater sensor)");
@@ -221,9 +253,11 @@ void sample_sens_in_and_out(void)
 
     while (i--)
     {
-        tmp_temp = temp_sensor_out.readTemperature();
+        // tmp_temp = temp_sensor_out.readTemperature();
         // delay(5);
-        tmp_humid = temp_sensor_out.readHumidity();
+        // tmp_humid = temp_sensor_out.readHumidity();
+        tmp_temp = 34.4;
+        tmp_humid = 80.0;
         if (!isnan(tmp_temp) && !isnan(tmp_humid))
         {
             break;
@@ -247,12 +281,16 @@ void sample_sens_in_and_out(void)
         Serial.println("Out sensor: I2C error!");
     }
 
-    // Read SHT temperature and humidity
+    // Read internal temperature and humidity
     while (i--)
     {
-        tmp_temp = temp_sensor_in.readTemperature();
-        // delay(5);
-        tmp_humid = temp_sensor_in.readHumidity();
+        sensors_event_t humidity, temp;
+        aht_internal.getEvent(
+            &humidity,
+            &temp); // populate temp and humidity objects with fresh data
+        tmp_temp = temp.temperature;
+        delay(5);
+        tmp_humid = humidity.relative_humidity;
         if (!isnan(tmp_temp) && !isnan(tmp_humid))
         {
             break;
@@ -503,21 +541,21 @@ void heater_recalc_pwm(void)
 
 void setupWebServer(void)
 {
-    server.onNotFound([](AsyncWebServerRequest *request) {
-        Serial.println("404:");
-        Serial.println(request->url());
-        request->send(404);
-    });
+    server.onNotFound(
+        [](AsyncWebServerRequest *request)
+        {
+            Serial.println("404:");
+            Serial.println(request->url());
+            request->send(404);
+        });
 
     // // send a file when /index is requested
-    server.on("/index.html", HTTP_ANY, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/index.html");
-    });
+    server.on("/index.html", HTTP_ANY, [](AsyncWebServerRequest *request)
+              { request->send(SPIFFS, "/index.html"); });
 
     // send a file when /index is requested
-    server.on("/", HTTP_ANY, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/index.html");
-    });
+    server.on("/", HTTP_ANY, [](AsyncWebServerRequest *request)
+              { request->send(SPIFFS, "/index.html"); });
 
     server.serveStatic("/img/", SPIFFS, "/img/");
     server.serveStatic("/css/", SPIFFS, "/css/");
@@ -525,92 +563,105 @@ void setupWebServer(void)
     server.serveStatic("/webfonts/", SPIFFS, "/webfonts/");
 
     // Get dry box status
-    server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request) {
-        char buff[200] = {0};
-        int len;
-        len =
-            snprintf(buff, 200,
-                     "{\"status\":%d, \"target_temp_in\":%f, "
-                     "\"max_temp_heater\":%f, "
-                     "\"temp_in\":%f, \"temp_heater\":%f, \"humid_in\":%f, "
-                     "\"fan_speed\":%d, \"temp_out\":%f, \"humid_out\":%d}",
-                     box_status, target_temperature_in, max_temperature_heater,
-                     temperature_in, temperature_heater, humidity_in, fan_duty,
-                     temperature_out, humidity_out);
+    server.on("/status", HTTP_GET,
+              [](AsyncWebServerRequest *request)
+              {
+                  char buff[200] = {0};
+                  int len;
+                  len = snprintf(
+                      buff, 200,
+                      "{\"status\":%d, \"target_temp_in\":%f, "
+                      "\"max_temp_heater\":%f, "
+                      "\"temp_in\":%f, \"temp_heater\":%f, \"humid_in\":%f, "
+                      "\"fan_speed\":%d, \"temp_out\":%f, \"humid_out\":%d}",
+                      box_status, target_temperature_in, max_temperature_heater,
+                      temperature_in, temperature_heater, humidity_in, fan_duty,
+                      temperature_out, humidity_out);
 
-        if (len)
-        {
-            request->send(200, "text/plain", buff);
-        }
-        else
-        {
-            request->send(500, "text/plain",
-                          "{\"status\": \"Internal server error\"}");
-        }
-    });
+                  if (len)
+                  {
+                      request->send(200, "text/plain", buff);
+                  }
+                  else
+                  {
+                      request->send(500, "text/plain",
+                                    "{\"status\": \"Internal server error\"}");
+                  }
+              });
 
     // Turn OFF dry box
-    server.on("/off", HTTP_GET, [](AsyncWebServerRequest *request) {
-        box_status = 0;
-        set_fan_duty(0);
-        set_heater_duty(HEATER_DUTY_OFF);
-        target_temperature_in = 0;
-        max_temperature_heater = 0;
-        request->send(200, "text/plain", "{\"status\": \"OK\"}");
-    });
+    server.on("/off", HTTP_GET,
+              [](AsyncWebServerRequest *request)
+              {
+                  box_status = 0;
+                  set_fan_duty(0);
+                  set_heater_duty(HEATER_DUTY_OFF);
+                  target_temperature_in = 0;
+                  max_temperature_heater = 0;
+                  request->send(200, "text/plain", "{\"status\": \"OK\"}");
+              });
 
-    // Turn ON dry box and set target temperature, max heater temperature and fan speed
-    server.on("/set", HTTP_GET, [](AsyncWebServerRequest *request) {
-        // Check if temperature, heater temperature and fan speed arguments are present
-        if (request->hasParam("temperature") && request->hasParam("heater") &&
-            request->hasParam("fanspeed"))
+    // Turn ON dry box and set target temperature, max heater temperature and
+    // fan speed
+    server.on(
+        "/set", HTTP_GET,
+        [](AsyncWebServerRequest *request)
         {
-            String str_temperature;
-            String str_heater;
-            String str_fanspeed;
-            int32_t temperature = 0;
-            int32_t heater = 0;
-            int32_t fanspeed = 0;
+            // Check if temperature, heater temperature and fan speed arguments
+            // are present
+            if (request->hasParam("temperature") &&
+                request->hasParam("heater") && request->hasParam("fanspeed"))
+            {
+                String str_temperature;
+                String str_heater;
+                String str_fanspeed;
+                int32_t temperature = 0;
+                int32_t heater = 0;
+                int32_t fanspeed = 0;
 
-            str_temperature = request->getParam("temperature")->value();
-            temperature = str_temperature.toInt();
+                str_temperature = request->getParam("temperature")->value();
+                temperature = str_temperature.toInt();
 
-            str_heater = request->getParam("heater")->value();
-            heater = str_heater.toInt();
+                str_heater = request->getParam("heater")->value();
+                heater = str_heater.toInt();
 
-            str_fanspeed = request->getParam("fanspeed")->value();
-            fanspeed = str_fanspeed.toInt();
+                str_fanspeed = request->getParam("fanspeed")->value();
+                fanspeed = str_fanspeed.toInt();
 
 #if DEF_DEUG_WEB_API
-            Serial.println((String) "Target temp: " + temperature +
-                           "C Heater: " + heater + "C Fan Speed: " + fanspeed);
+                Serial.println((String) "Target temp: " + temperature +
+                               "C Heater: " + heater +
+                               "C Fan Speed: " + fanspeed);
 #endif
 
-            // Check drybox temperature and heater temperature limit
-            if ( (temperature <= LIMIT_TEMP_IN_MAX) && (heater <= LIMIT_TEMP_HEATER_MAX) )
-            {
-                target_temperature_in = temperature;
-                max_temperature_heater = heater;
-                set_fan_duty(fanspeed);
-                box_status = 1;
-                request->send(200, "text/plain", "{\"status\": \"OK\"}");
-                return;
+                // Check drybox temperature and heater temperature limit
+                if ((temperature <= LIMIT_TEMP_IN_MAX) &&
+                    (heater <= LIMIT_TEMP_HEATER_MAX))
+                {
+                    target_temperature_in = temperature;
+                    max_temperature_heater = heater;
+                    set_fan_duty(fanspeed);
+                    box_status = 1;
+                    request->send(200, "text/plain", "{\"status\": \"OK\"}");
+                    return;
+                }
+                // If either of them are out of range, return bad request status
+                else
+                {
+                    request->send(
+                        400, "text/plain",
+                        "{\"status\": \"Bad request. Limit error!\"}");
+                    return;
+                }
             }
-            // If either of them are out of range, return bad request status
+            // Not all arguments are present in the request
             else
             {
-                request->send(400, "text/plain", "{\"status\": \"Bad request. Limit error!\"}");
+                request->send(400, "text/plain",
+                              "{\"status\": \"Bad request\"}");
                 return;
             }
-
-        }
-        // Not all arguments are present in the request
-        else
-        {
-            request->send(400, "text/plain", "{\"status\": \"Bad request\"}");
-            return;
-        }
-    });
+        });
 }
 
 void check_wifi_connection(void)
